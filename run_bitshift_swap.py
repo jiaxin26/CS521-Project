@@ -16,7 +16,7 @@ print("=== FX before rewrite ===")
 print(gm.graph)
 
 gm = swap_bitshift_reducesum(gm)
-print("=== FX after  rewrite ===")
+print("=== FX after rewrite ===")
 print(gm.graph)
 
 compiled_gm = torch.compile(gm, backend="inductor")
@@ -30,4 +30,4 @@ print("input:\n", x)
 print("Uncompiled output:", out_uncompiled)
 print("Compiled output:", out)
 
-assert torch.equal(out_uncompiled, out), "Outputs differ!"
+assert torch.equal(out_uncompiled, out), "Outputs do not match!"

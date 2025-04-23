@@ -2,7 +2,7 @@ import torch
 
 
 def swap_bitshift_reducesum(gm: torch.fx.GraphModule):
-    """Rewrite ReduceSum(BitShift(x)) → BitShift(ReduceSum(x)) bit shift."""
+    """Rewrite Commutative: ReduceSum(BitShift(x)) → BitShift(ReduceSum(x)) bit shift."""
     bitshift_ops = [torch.bitwise_left_shift]
     # Only left shift is included as it distributes over sum (e.g., sum(x << k) == sum(x) << k).
     # Right shift does NOT distribute over addition and can lead to incorrect rewrites.
