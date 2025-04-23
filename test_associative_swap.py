@@ -21,20 +21,16 @@ def test_reciprocal_associative_rewrite(shape):
     A = torch.rand(shape) + 0.5  # Add 0.5 to ensure positive values
     B = torch.rand(shape) + 0.5
 
-    # Original model
     model = M().eval()
     original_output = model(A, B)
 
-    # Rewritten model
     traced = symbolic_trace(model)
     rewritten = swap_recip_associative(traced)
     rewritten_output = rewritten(A, B)
 
-    # Verify results match
     torch.testing.assert_close(
         original_output, rewritten_output, rtol=1e-5, atol=1e-8)
 
-    # Verify the graph was actually transformed
     graph_str = str(rewritten.graph)
     assert "square" in graph_str, "Expected torch.square in graph"
     assert "reciprocal" in graph_str, "Expected torch.reciprocal in graph"
