@@ -7,6 +7,7 @@ ELEMENTWISE_OPS = {
     torch.add, torch.sub, torch.mul, torch.div,
     torch.relu, torch.sigmoid, torch.tanh,
     torch.neg, torch.exp, torch.log,
+    torch.reciprocal, torch.square,
     operator.add, operator.sub, operator.mul, operator.truediv
 }
 
@@ -39,13 +40,13 @@ def find_elementwise_chains(graph):
             if not is_elementwise(next_node) or next_node in visited:
                 break
 
-            found = False
-            for arg in next_node.args:
-                if isinstance(arg, torch.fx.Node) and arg is current:
-                    found = True
-                    break
+            only_depends_on_current = all(
+                not (isinstance(arg, torch.fx.Node) and arg.op !=
+                     "get_attr" and arg is not current)
+                for arg in next_node.args
+            )
 
-            if not found:
+            if not only_depends_on_current:
                 break
 
             chain.append(next_node)
@@ -54,7 +55,6 @@ def find_elementwise_chains(graph):
 
         if len(chain) >= 2:
             chains.append(chain)
-
     return chains
 
 
@@ -95,6 +95,8 @@ def generate_fused_fn(chain, gm):
                     result = method(*method_args)
 
         return result
+
+    fused_function.is_fused_function = True
     return fused_function
 
 
@@ -103,6 +105,7 @@ def fuse_elementwise_chains(gm: GraphModule):
     chains = find_elementwise_chains(graph)
 
     for chain in chains:
+
         first = chain[0]
         last = chain[-1]
         input_val = first.args[0]
@@ -115,6 +118,7 @@ def fuse_elementwise_chains(gm: GraphModule):
             fused = graph.call_function(fused_fn, args=(input_val,))
 
         last.replace_all_uses_with(fused)
+        print(f"Replaced uses of {last.name} with fused function")
 
         for node in reversed(chain):
             graph.erase_node(node)
