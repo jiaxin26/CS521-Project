@@ -7,7 +7,6 @@ ELEMENTWISE_OPS = {
     torch.add, torch.sub, torch.mul, torch.div,
     torch.relu, torch.sigmoid, torch.tanh,
     torch.neg, torch.exp, torch.log,
-    torch.reciprocal, torch.square,
     operator.add, operator.sub, operator.mul, operator.truediv
 }
 
