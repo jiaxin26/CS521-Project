@@ -39,7 +39,13 @@ def find_elementwise_chains(graph):
             if not is_elementwise(next_node) or next_node in visited:
                 break
 
-            if len(next_node.args) == 0 or next_node.args[0] != current:
+            found = False
+            for arg in next_node.args:
+                if isinstance(arg, torch.fx.Node) and arg is current:
+                    found = True
+                    break
+
+            if not found:
                 break
 
             chain.append(next_node)
@@ -52,23 +58,33 @@ def find_elementwise_chains(graph):
     return chains
 
 
-def generate_fused_fn(chain):
+def generate_fused_fn(chain, gm):
+    # Pre-capture tensor constants
+    constants = {}
+
     # Check if this chain is safe to fuse
-    for node in chain:
+    for i, node in enumerate(chain):
         if node.op == "call_function" and len(node.args) >= 2:
             second_arg = node.args[1]
             if isinstance(second_arg, torch.fx.Node):
-                return None  # Do not fuse if second arg is a node (variable)
+                if second_arg.op == "get_attr":
+                    # Pre-capture tensor value
+                    constants[(i, 1)] = getattr(gm, second_arg.target)
+                elif second_arg.op != "get_attr":
+                    return None  # No fusion if second arg is another variable node
 
     def fused_function(x):
         result = x
-        for node in chain:
+        for i, node in enumerate(chain):
             if node.op == "call_function":
-                if len(node.args) == 1:
+                if len(node.args) == 1:  # unary op
                     result = node.target(result)
-                elif len(node.args) >= 2:
-                    second_arg = node.args[1]
-                    result = node.target(result, second_arg)
+                elif len(node.args) >= 2:  # binary op
+                    if (i, 1) in constants:
+                        result = node.target(result, constants[(i, 1)])
+                    else:
+                        second_arg = node.args[1]
+                        result = node.target(result, second_arg)
 
             elif node.op == "call_method":
                 method = getattr(result, node.target)
@@ -91,7 +107,7 @@ def fuse_elementwise_chains(gm: GraphModule):
         last = chain[-1]
         input_val = first.args[0]
 
-        fused_fn = generate_fused_fn(chain)
+        fused_fn = generate_fused_fn(chain, gm)
         if fused_fn is None:
             continue
 
