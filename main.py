@@ -17,14 +17,8 @@ def apply_all_rewrites(gm: torch.fx.GraphModule):
 
 
 def optimize_graph(gm: torch.fx.GraphModule):
-    # First apply algebraic rewrites
     gm = apply_all_rewrites(gm)
-    print("=== Graph after rewrite ===")
-    print(gm.graph)
 
-    # Then apply one-to-one fusion
     gm = fuse_elementwise_chains(gm)
-    print("=== Graph after fusion ===")
-    print(gm.graph)
 
     return gm
