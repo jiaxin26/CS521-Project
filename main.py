@@ -1,6 +1,7 @@
 import torch
 from bitshift_swap import swap_bitshift_reducesum
 from recip_associative_swap import swap_recip_associative
+from fuse_one_to_one_operations import fuse_elementwise_chains
 
 
 def apply_all_rewrites(gm: torch.fx.GraphModule):
@@ -18,6 +19,6 @@ def apply_all_rewrites(gm: torch.fx.GraphModule):
 def optimize_graph(gm: torch.fx.GraphModule):
     gm = apply_all_rewrites(gm)
 
-    # gm = fuse_one_to_one_operations(gm)
+    gm = fuse_elementwise_chains(gm)
 
     return gm

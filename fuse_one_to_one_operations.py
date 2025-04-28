@@ -1,0 +1,139 @@
+import torch
+import torch.nn as nn
+from torch.fx import symbolic_trace, GraphModule
+import operator
+
+ELEMENTWISE_OPS = {
+    torch.add, torch.sub, torch.mul, torch.div,
+    torch.relu, torch.sigmoid, torch.tanh,
+    torch.neg, torch.exp, torch.log,
+    operator.add, operator.sub, operator.mul, operator.truediv
+}
+
+METHOD_OPS = {"relu", "sigmoid", "tanh", "add", "mul", "div", "sub"}
+
+
+def is_elementwise(node):
+    return (node.op == "call_function" and node.target in ELEMENTWISE_OPS) or \
+           (node.op == "call_method" and node.target in ELEMENTWISE_OPS)
+
+
+def find_elementwise_chains(graph):
+    chains = []
+    visited = set()
+
+    for node in graph.nodes:
+        if node in visited or not is_elementwise(node):
+            continue
+
+        chain = [node]
+        visited.add(node)
+        current = node
+
+        while True:
+            users = list(current.users)
+            if len(users) != 1:
+                break
+
+            next_node = users[0]
+            if not is_elementwise(next_node) or next_node in visited:
+                break
+
+            if len(next_node.args) == 0 or next_node.args[0] != current:
+                break
+
+            chain.append(next_node)
+            visited.add(next_node)
+            current = next_node
+
+        if len(chain) >= 2:
+            chains.append(chain)
+
+    return chains
+
+
+def generate_fused_fn(chain):
+    # Check if this chain is safe to fuse
+    for node in chain:
+        if node.op == "call_function" and len(node.args) >= 2:
+            second_arg = node.args[1]
+            if isinstance(second_arg, torch.fx.Node):
+                return None  # Do not fuse if second arg is a node (variable)
+
+    def fused_function(x):
+        result = x
+        for node in chain:
+            if node.op == "call_function":
+                if len(node.args) == 1:
+                    result = node.target(result)
+                elif len(node.args) >= 2:
+                    second_arg = node.args[1]
+                    result = node.target(result, second_arg)
+
+            elif node.op == "call_method":
+                method = getattr(result, node.target)
+                if len(node.args) == 0:
+                    result = method()
+                else:
+                    method_args = node.args[1:]
+                    result = method(*method_args)
+
+        return result
+    return fused_function
+
+
+def fuse_elementwise_chains(gm: GraphModule):
+    graph = gm.graph
+    chains = find_elementwise_chains(graph)
+
+    for chain in chains:
+        first = chain[0]
+        last = chain[-1]
+        input_val = first.args[0]
+
+        fused_fn = generate_fused_fn(chain)
+        if fused_fn is None:
+            continue
+
+        with graph.inserting_before(first):
+            fused = graph.call_function(fused_fn, args=(input_val,))
+
+        last.replace_all_uses_with(fused)
+
+        for node in reversed(chain):
+            graph.erase_node(node)
+
+    gm.recompile()
+    return gm
+
+
+class TestModel(nn.Module):
+    def forward(self, x):
+        return torch.sigmoid(torch.relu(torch.add(x, 1)))
+
+
+if __name__ == "__main__":
+    model = TestModel()
+    traced = symbolic_trace(model)
+
+    print("=== Before Fusion ===")
+    print(traced.graph)
+
+    optimized = fuse_elementwise_chains(traced)
+
+    print("=== After Fusion ===")
+    print(optimized.graph)
+
+    x = torch.randn(3, 4)
+    ref_out = model(x)
+    opt_out = optimized(x)
+
+    print("Ref Output:", ref_out)
+    print("Fused Output:", opt_out)
+
+    assert torch.allclose(ref_out, opt_out, rtol=1e-4), "Mismatch in outputs"
+
+    compiled = torch.compile(optimized)
+    compiled_out = compiled(x)
+    print("Compiled Output:", compiled_out)
+    assert torch.allclose(compiled_out, ref_out, rtol=1e-4)
