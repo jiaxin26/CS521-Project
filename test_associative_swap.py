@@ -26,10 +26,15 @@ def test_reciprocal_associative_rewrite(shape):
 
     traced = symbolic_trace(model)
     rewritten = swap_recip_associative(traced)
+    compiled_rewritten = torch.compile(rewritten, backend='inductor')
+
     rewritten_output = rewritten(A, B)
+    compiled_output = compiled_rewritten(A, B)
 
     torch.testing.assert_close(
         original_output, rewritten_output, rtol=1e-5, atol=1e-8)
+    torch.testing.assert_close(
+        original_output, compiled_output, rtol=1e-5, atol=1e-8)
 
     graph_str = str(rewritten.graph)
     assert "square" in graph_str, "Expected torch.square in graph"

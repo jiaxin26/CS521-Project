@@ -23,11 +23,15 @@ def test_swap_bitshift_sum(shift_fn, shape, shift, sum_style):
     model = M().eval()
     traced = symbolic_trace(model)
     fused = swap_bitshift_reducesum(traced)
+    compiled_fused = torch.compile(fused, backend='inductor')
 
     # Check that values are equal
     out1 = model(x)
     out2 = fused(x)
+    out3 = compiled_fused(x)
+
     torch.testing.assert_close(out1, out2)
+    torch.testing.assert_close(out1, out3)
 
     # Check that rewrite was applied
     assert "bitwise" in str(
