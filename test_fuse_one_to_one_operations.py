@@ -18,8 +18,12 @@ def _run_fusion_test(model, inputs, expect_fusion=True):
 
     if expect_fusion:
         assert "call_function" in fused_graph_str or "call_method" in fused_graph_str
+        assert "fused_function" in fused_graph_str, "Fusion was not applied"
+        return fused_graph_str
     else:
         assert fused_graph_str == str(traced.graph)
+        assert "fused_function" not in fused_graph_str
+        return fused_graph_str
 
 
 ########## Basic fusion tests ##########
@@ -34,15 +38,28 @@ class ExpChainModel(torch.nn.Module):
         return torch.sigmoid(torch.exp(torch.relu(x)))
 
 
-@pytest.mark.parametrize("model_cls", [
-    AddReluSigmoid,
-    ExpChainModel,
-])
-def test_fuse_elementwise_chains(model_cls):
-    model = model_cls()
+def test_add_relu_sigmoid():
+    class AddReluSigmoid(torch.nn.Module):
+        def forward(self, x):
+            return torch.sigmoid(torch.relu(x + 1))
+    model = AddReluSigmoid()
     x = torch.randn(4, 4)
+    fused_graph_str = _run_fusion_test(model, (x,), expect_fusion=True)
+    assert "sigmoid" not in fused_graph_str, "sigmoid should NOT be present in the graph"
+    assert "relu" not in fused_graph_str, "relu should NOT be present in the graph"
+    assert "add" not in fused_graph_str, "add should NOT be present in the graph"
 
-    _run_fusion_test(model, (x,))
+
+def test_exp_chain():
+    class ExpChainModel(torch.nn.Module):
+        def forward(self, x):
+            return torch.sigmoid(torch.exp(torch.relu(x)))
+    model = ExpChainModel()
+    x = torch.randn(4, 4)
+    fused_graph_str = _run_fusion_test(model, (x,), expect_fusion=True)
+    assert "sigmoid" not in fused_graph_str, "sigmoid should NOT be present in the graph"
+    assert "exp" not in fused_graph_str, "exp should NOT be present in the graph"
+    assert "relu" not in fused_graph_str, "relu should NOT be present in the graph"
 
 
 @pytest.mark.parametrize("shape", [(1,), (2, 3), (2, 3, 4), (5, 5, 5, 5)])
@@ -63,7 +80,11 @@ def test_method_style_operations():
 
     model = MethodStyleOps()
     x = torch.randn(4, 4)
-    _run_fusion_test(model, (x,))
+    fused_graph_str = _run_fusion_test(model, (x,), expect_fusion=True)
+
+    assert "sigmoid" not in fused_graph_str, "sigmoid should NOT be present in the graph"
+    assert "tanh" not in fused_graph_str, "tanh should NOT be present in the graph"
+    assert "relu" not in fused_graph_str, "relu should NOT be present in the graph"
 
 
 def test_mixed_operation_styles():
@@ -76,13 +97,13 @@ def test_mixed_operation_styles():
     _run_fusion_test(model, (x,))
 
 
-@pytest.mark.parametrize("op_pair", [
-    (torch.relu, torch.sigmoid),
-    (torch.tanh, torch.exp),
-    (torch.log, torch.abs),
-    (torch.neg, torch.sin),
+@pytest.mark.parametrize("op_pair, expect_fusion", [
+    ((torch.relu, torch.sigmoid), True),
+    ((torch.tanh, torch.exp), True),
+    ((torch.log, torch.abs), False),
+    ((torch.neg, torch.sin), False),
 ])
-def test_various_unary_operations(op_pair):
+def test_various_unary_operations(op_pair, expect_fusion):
     op1, op2 = op_pair
 
     class UnaryOps(torch.nn.Module):
@@ -91,7 +112,7 @@ def test_various_unary_operations(op_pair):
 
     model = UnaryOps()
     x = torch.rand(3, 3) + 1e-6 if op1 == torch.log else torch.randn(3, 3)
-    _run_fusion_test(model, (x,))
+    _run_fusion_test(model, (x,), expect_fusion=expect_fusion)
 
 
 def test_binary_operations_with_constants():
@@ -104,20 +125,28 @@ def test_binary_operations_with_constants():
 
     model = BinaryOpsWithConstants()
     x = torch.randn(3, 3)
-    _run_fusion_test(model, (x,))
+    fused_graph_str = _run_fusion_test(model, (x,), expect_fusion=True)
+    assert "add" not in fused_graph_str, "add should NOT be present in the graph"
+    assert "mul" not in fused_graph_str, "mul should NOT be present in the graph"
+    assert "sub" not in fused_graph_str, "sub should NOT be present in the graph"
 
 
 def test_tensor_constants():
-    const1 = torch.tensor([1.0, 2.0, 3.0])
-    const2 = torch.tensor([0.1, 0.2, 0.3])
-
     class TensorConstants(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.register_buffer('const1', torch.tensor([1.0, 2.0, 3.0]))
+            self.register_buffer('const2', torch.tensor([0.1, 0.2, 0.3]))
+
         def forward(self, x):
-            return (x + const1) * const2
+            return (x + self.const1) * self.const2
 
     model = TensorConstants()
     x = torch.randn(3)
-    _run_fusion_test(model, (x,))
+    fused_graph_str = _run_fusion_test(model, (x,), expect_fusion=True)
+
+    assert "add" not in fused_graph_str, "add should NOT be present after fusion"
+    assert "mul" not in fused_graph_str, "mul should NOT be present after fusion"
 
 ########## Edge cases ##########
 
@@ -135,7 +164,11 @@ def test_chain_with_multiple_uses():
 
     model = MultipleUses().eval()
     x = torch.randn(3, 3)
-    _run_fusion_test(model, (x,))
+    fused_graph_str = _run_fusion_test(
+        model, (x,), expect_fusion=True)  # partial fusion
+    assert "tanh" in fused_graph_str, "tanh should be present in the graph"
+    assert "sigmoid" not in fused_graph_str, "sigmoid should NOT be present in the graph"
+    assert "relu" not in fused_graph_str, "relu should NOT be present in the graph"
 
 
 def test_multiple_fusion_chains():
@@ -162,6 +195,7 @@ def test_multiple_fusion_chains():
 
     assert fused_node_count < original_node_count
     assert "call_function" in str(fused.graph)
+    assert "fused_function" in str(fused.graph)
 
 
 def test_no_fusion_non_elementwise():
