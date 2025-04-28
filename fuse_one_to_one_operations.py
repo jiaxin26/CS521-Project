@@ -15,7 +15,7 @@ METHOD_OPS = {"relu", "sigmoid", "tanh", "add", "mul", "div", "sub"}
 
 def is_elementwise(node):
     return (node.op == "call_function" and node.target in ELEMENTWISE_OPS) or \
-           (node.op == "call_method" and node.target in ELEMENTWISE_OPS)
+           (node.op == "call_method" and node.target in METHOD_OPS)
 
 
 def find_elementwise_chains(graph):
