@@ -118,7 +118,6 @@ def fuse_elementwise_chains(gm: GraphModule):
             fused = graph.call_function(fused_fn, args=(input_val,))
 
         last.replace_all_uses_with(fused)
-        print(f"Replaced uses of {last.name} with fused function")
 
         for node in reversed(chain):
             graph.erase_node(node)
