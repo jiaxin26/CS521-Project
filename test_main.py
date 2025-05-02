@@ -70,8 +70,9 @@ def test_no_rewrite():
     x = torch.randn(4, 4)
     _run_optimization_test(model, (x,), expect_optimization=False)
 
-
 # Integration tests for Distributive rewrites
+
+
 class Distributive1Model(torch.nn.Module):
     def forward(self, a, b, c):
         return a * c + a * b
@@ -86,7 +87,8 @@ def test_distributive1_integration():
     traced = symbolic_trace(model.eval())
     ref_out = traced(a, b, c)
 
-    optimized, graph_str = _run_optimization_test(model, (a, b, c), expect_optimization=True)
+    optimized, graph_str = _run_optimization_test(
+        model, (a, b, c), expect_optimization=True)
     opt_out = optimized(a, b, c)
 
     torch.testing.assert_close(ref_out, opt_out, rtol=1e-4, atol=1e-8)
@@ -106,7 +108,8 @@ def test_distributive2_integration():
     traced = symbolic_trace(model.eval())
     ref_out = traced(x, y)
 
-    optimized, graph_str = _run_optimization_test(model, (x, y), expect_optimization=True)
+    optimized, graph_str = _run_optimization_test(
+        model, (x, y), expect_optimization=True)
     opt_out = optimized(x, y)
 
     torch.testing.assert_close(ref_out, opt_out, rtol=1e-4, atol=1e-8)
