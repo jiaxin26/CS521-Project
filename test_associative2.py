@@ -1,6 +1,7 @@
 import torch
 import pytest
 from torch.fx import symbolic_trace
+from associative2 import SqrtAssociativePass
 
 def test_sqrt_associative_basic():
     """Test basic case: (a * sqrt(b)) * (sqrt(b) * c) => a * b * c"""
