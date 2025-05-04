@@ -94,12 +94,20 @@ def test_commutative_with_multiple_dims():
     class TestModule(torch.nn.Module):
         def forward(self, x):
             exp_x = torch.exp(x)
-            return torch.prod(exp_x, dim=(0, 1))
+            # First reduce along dim 0, then dim 1
+            return torch.prod(torch.prod(exp_x, dim=0), dim=0)
     
     x = torch.randn(2, 3, 4)
     
     original_module = TestModule()
     optimized_module = CommutativePass()(TestModule())
+    
+    # Print debugging information
+    print("Input shape:", x.shape)
+    print("Original output shape:", original_module(x).shape)
+    print("Optimized output shape:", optimized_module(x).shape)
+    print("Original output:", original_module(x))
+    print("Optimized output:", optimized_module(x))
     
     assert torch.allclose(
         original_module(x),
@@ -130,12 +138,21 @@ def test_commutative_with_all_params():
     class TestModule(torch.nn.Module):
         def forward(self, x):
             exp_x = torch.exp(x)
-            return torch.prod(exp_x, dim=(0, 1), keepdim=True, dtype=torch.float64)
+            # First reduce along dim 0, then dim 1, with keepdim=True
+            return torch.prod(torch.prod(exp_x, dim=0, keepdim=True, dtype=torch.float64), 
+                            dim=0, keepdim=True, dtype=torch.float64)
     
     x = torch.randn(2, 3, 4)
     
     original_module = TestModule()
     optimized_module = CommutativePass()(TestModule())
+    
+    # Print debugging information
+    print("Input shape:", x.shape)
+    print("Original output shape:", original_module(x).shape)
+    print("Optimized output shape:", optimized_module(x).shape)
+    print("Original output:", original_module(x))
+    print("Optimized output:", optimized_module(x))
     
     assert torch.allclose(
         original_module(x),
@@ -191,10 +208,16 @@ def test_commutative_different_shapes(shape):
             exp_x = torch.exp(x)
             return torch.prod(exp_x)
     
-    x = torch.randn(shape)
+    x = torch.randn(*shape)  # Unpack the shape tuple
     
     original_module = TestModule()
     optimized_module = CommutativePass()(TestModule())
+    
+    # Print debugging information
+    print(f"\nTesting shape {shape}:")
+    print("Input shape:", x.shape)
+    print("Original output:", original_module(x))
+    print("Optimized output:", optimized_module(x))
     
     assert torch.allclose(
         original_module(x),
