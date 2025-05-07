@@ -4,10 +4,19 @@ from torch.fx import symbolic_trace
 from distributive1 import DistributiveRulePass
 
 
-class PatternModule(torch.nn.Module):
-    def forward(self, a, b, c):
-        # Pattern: A * C + A * B
-        return a * c + a * b
+def make_model(expr):
+    class PatternModule(torch.nn.Module):
+        def forward(self, a, b, c):
+            return expr(a, b, c)
+    return PatternModule()
+
+
+expressions = [
+    lambda a, b, c: a * c + a * b,
+    lambda a, b, c: c * a + b * a,
+    lambda a, b, c: a * c + b * a,
+    lambda a, b, c: c * a + a * b,
+]
 
 
 class NoPatternModule(torch.nn.Module):
@@ -16,16 +25,17 @@ class NoPatternModule(torch.nn.Module):
         return a * b + c * c
 
 
-def test_distributive_rule_simple():
+@pytest.mark.parametrize("expr", expressions)
+def test_distributive_rule_simple(expr):
     torch.manual_seed(0)
     a = torch.randn(3, 3)
     b = torch.randn(3, 3)
     c = torch.randn(3, 3)
 
+    model = make_model(expr).eval()
     # Original vs optimized outputs
-    original = PatternModule()(a, b, c)
-    optimized_module = DistributiveRulePass()(PatternModule())
-    optimized = optimized_module(a, b, c)
+    original = model(a, b, c)
+    optimized = DistributiveRulePass()(model)(a, b, c)
     expected = a * (b + c)
 
     # Verify functional correctness
@@ -40,7 +50,7 @@ def test_distributive_rule_no_match():
     c = torch.randn(3, 3)
 
     # Trace original
-    original_module = NoPatternModule()
+    original_module = NoPatternModule().eval()
     traced = symbolic_trace(original_module)
 
     # Apply pass and re-trace
