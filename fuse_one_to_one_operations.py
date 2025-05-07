@@ -14,6 +14,8 @@ METHOD_OPS = {"relu", "sigmoid", "tanh", "add", "mul", "div", "sub"}
 
 
 def is_elementwise(node):
+    if getattr(node.target, "__name__", None) == "fused_function":
+        return False
     return (node.op == "call_function" and node.target in ELEMENTWISE_OPS) or \
            (node.op == "call_method" and node.target in METHOD_OPS)
 
@@ -65,12 +67,12 @@ def generate_fused_fn(chain, gm):
     for i, node in enumerate(chain):
         if node.op == "call_function" and len(node.args) >= 2:
             second_arg = node.args[1]
-            if isinstance(second_arg, torch.fx.Node):
-                if second_arg.op == "get_attr":
-                    # Pre-capture tensor value
-                    constants[(i, 1)] = getattr(gm, second_arg.target)
-                elif second_arg.op != "get_attr":
-                    return None  # No fusion if second arg is another variable node
+            if isinstance(second_arg, torch.fx.Node) and second_arg.op == "get_attr":
+                constants[(i, 1)] = getattr(gm, second_arg.target)
+            elif not isinstance(second_arg, torch.fx.Node):
+                constants[(i, 1)] = second_arg
+            else:
+                return None  # No fusion if second arg is another variable node
 
     def fused_function(x):
         result = x
@@ -95,6 +97,7 @@ def generate_fused_fn(chain, gm):
 
         return result
 
+    fused_function.__name__ = "fused_function"
     fused_function.is_fused_function = True
     return fused_function
 
@@ -104,6 +107,9 @@ def fuse_elementwise_chains(gm: GraphModule):
     chains = find_elementwise_chains(graph)
 
     for chain in chains:
+        # If the head node is no longer in the graph (erased by a prior fusion), skip
+        if chain[0] not in graph.nodes:
+            continue
 
         first = chain[0]
         last = chain[-1]

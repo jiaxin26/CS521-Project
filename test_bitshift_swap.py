@@ -10,11 +10,15 @@ from bitshift_swap import swap_bitshift_reducesum
     (torch.bitwise_left_shift, (4, 4), 0, "method"),      # shift=0 edge case
     (torch.bitwise_left_shift, (0, 4), 2, "function"),     # empty input
     (torch.bitwise_left_shift, (100, 100), 1, "method"),   # large tensor
+    ("__lshift__",           (4, 4), 3, "method"),
 ])
 def test_swap_bitshift_sum(shift_fn, shape, shift, sum_style):
     class M(torch.nn.Module):
         def forward(self, x):
-            shifted = shift_fn(x, shift)
+            if shift_fn == "__lshift__":
+                shifted = x << shift
+            else:
+                shifted = shift_fn(x, shift)
             return shifted.sum() if sum_style == "method" else torch.sum(shifted)
 
     torch.manual_seed(0)

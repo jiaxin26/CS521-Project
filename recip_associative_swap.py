@@ -18,52 +18,62 @@ def swap_recip_associative(gm: torch.fx.GraphModule):
         if not (is_reciprocal(lhs) and is_reciprocal(rhs)):
             continue
 
-        recip_1, recip_2 = lhs, rhs
-        arg_1, arg_2 = get_recip_arg(lhs), get_recip_arg(rhs)
-
-        # Try: arg_2 = mul(A, B) where A == arg_1
+        arg1, arg2 = get_recip_arg(lhs), get_recip_arg(rhs)
         match_found = False
-        if (
-            arg_2.op == "call_function"
-            and arg_2.target in (torch.mul, operator.mul)
-            and arg_1 in arg_2.args
-        ):
-            a_node = arg_1
-            mul_node = arg_2
-            b_node = arg_2.args[1] if arg_2.args[0] == a_node else arg_2.args[0]
+
+        # Case 1:  rhs = Recip(A*B), lhs = Recip(A)
+        # Pattern: rhs = Recip(A*B) and lhs = Recip(A)
+        if (isinstance(arg2, torch.fx.Node)
+            and arg2.op == "call_function" and arg2.target in (torch.mul, operator.mul)
+                and arg1 in arg2.args):
+            a_node = arg1
+            mul_node = arg2
+            b_node = arg2.args[1] if arg2.args[0] is a_node else arg2.args[0]
+            recip_a_node = lhs
             match_found = True
-        # Try reversed pattern: arg_1 = mul(A, B) where A == arg_2
-        elif (
-            arg_1.op == "call_function"
-            and arg_1.target in (torch.mul, operator.mul)
-            and arg_2 in arg_1.args
-        ):
-            a_node = arg_2
-            mul_node = arg_1
-            b_node = arg_1.args[1] if arg_1.args[0] == a_node else arg_1.args[0]
-            recip_1, recip_2 = rhs, lhs
+        # Symmetric: lhs = Recip(A*B) and rhs = Recip(A)
+        elif (isinstance(arg1, torch.fx.Node)
+              and arg1.op == "call_function" and arg1.target in (torch.mul, operator.mul)
+              and arg2 in arg1.args):
+            a_node = arg2
+            mul_node = arg1
+            b_node = arg1.args[1] if arg1.args[0] is a_node else arg1.args[0]
+            recip_a_node = rhs
             match_found = True
 
         if not match_found:
             continue
 
         with gm.graph.inserting_before(node):
-            square_recip_a = gm.graph.call_function(torch.square, (recip_1,))
-            recip_b = gm.graph.call_function(torch.reciprocal, (b_node,))
+            square_recip = gm.graph.call_function(
+                torch.square, args=(recip_a_node,))
+            recip_b = gm.graph.call_function(torch.reciprocal, args=(b_node,))
             new_mul = gm.graph.call_function(
-                torch.mul, (square_recip_a, recip_b))
+                torch.mul, args=(square_recip, recip_b))
 
         node.replace_all_uses_with(new_mul)
 
         # Clean up dead nodes if no other users
-        for dead_node in [node, recip_2, mul_node]:
-            if len(dead_node.users) == 0:
-                gm.graph.erase_node(dead_node)
+        for dead in (node, mul_node, rhs if recip_a_node is lhs else lhs):
+            if len(dead.users) == 0:
+                gm.graph.erase_node(dead)
+
+        # Cleanup orphaned torch.tensor(1) nodes
+        for n in list(gm.graph.nodes):
+            if (
+                n.op == "call_function"
+                and n.target == torch.tensor
+                and not n.users
+            ):
+                gm.graph.erase_node(n)
 
         modified = True
 
     if modified:
-        gm.recompile()
+        gm.graph.lint()
+        new_gm = torch.fx.GraphModule(gm, gm.graph)
+        new_gm.recompile()
+        return new_gm
     return gm
 
 
