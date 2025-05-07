@@ -41,14 +41,17 @@ class CommutativePass:
             # Get the argument of exp
             exp_arg = arg.args[0]
 
-            # Get any additional arguments (like dim) from the prod operation
-            kwargs = node.kwargs if hasattr(node, 'kwargs') else {}
+            # Extract only the reduction dimensions from prod
+            reduce_kwargs = {}
+            for key in ('dim', 'keepdim', 'dtype'):
+                if key in node.kwargs:
+                    reduce_kwargs[key] = node.kwargs[key]
 
             # Create new operations: Exp(ReduceSum(A))
             with graph.inserting_before(node):
-                # First compute ReduceSum(A) with the same dimension if specified
+                # Sum only over the same dimensions as the original prod
                 reduce_sum = graph.call_function(
-                    torch.sum, args=(exp_arg,), kwargs=kwargs)
+                    torch.sum, args=(exp_arg,), kwargs=reduce_kwargs)
                 # Then compute Exp(ReduceSum(A))
                 new_node = graph.call_function(
                     torch.exp, args=(reduce_sum,))
@@ -68,8 +71,10 @@ class CommutativePass:
                     # Skip if node is already deleted
                     pass
 
-        traced.recompile()
-        return traced
+        graph.lint()
+        new_module = GraphModule(traced, graph)
+        new_module.recompile()
+        return new_module
 
 
 # Test code
