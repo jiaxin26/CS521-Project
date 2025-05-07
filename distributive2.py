@@ -13,10 +13,16 @@ class DistributiveRule2Pass:
         self.mul_patterns = {operator.mul, torch.mul, "mul", "__mul__"}
 
     def _is_add_node(self, node):
+        # Check if node is a torch.fx.Node first
+        if not isinstance(node, torch.fx.Node):
+            return False
         return (node.op == "call_function" and node.target in self.add_patterns) or \
                (node.op == "call_method" and node.target in self.add_patterns)
 
     def _is_mul_node(self, node):
+        # Check if node is a torch.fx.Node first
+        if not isinstance(node, torch.fx.Node):
+            return False
         return (node.op == "call_function" and node.target in self.mul_patterns) or \
                (node.op == "call_method" and node.target in self.mul_patterns)
 
