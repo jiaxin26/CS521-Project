@@ -1,84 +1,75 @@
 import torch
 import operator
-from torch.fx import symbolic_trace
+from torch.fx import GraphModule, symbolic_trace
 
 
-def swap_recip_associative(gm: torch.fx.GraphModule):
-    """Rewrite Associative: Recip(A) * Recip(A * B) → Square(Recip(A)) * Recip(B)"""
+def swap_recip_associative(gm: GraphModule):
+    """Rewrite Recip(A)*Recip(A*B) → square(Recip(A)) * Recip(B)."""
+    nodes_to_delete = set()
     modified = False
 
     for node in list(gm.graph.nodes):
-        # Match outer multiplication
+        # 1) match outer multiplication
         if node.op != "call_function" or node.target not in (torch.mul, operator.mul):
             continue
-
         lhs, rhs = node.args
-
-        # Ensure both sides are reciprocal calls
         if not (is_reciprocal(lhs) and is_reciprocal(rhs)):
             continue
 
+        # 2) figure out which side is Recip(A) vs Recip(A*B)
+        a_node = b_node = recip_a_node = mul_node = None
         arg1, arg2 = get_recip_arg(lhs), get_recip_arg(rhs)
-        match_found = False
 
-        # Case 1:  rhs = Recip(A*B), lhs = Recip(A)
-        # Pattern: rhs = Recip(A*B) and lhs = Recip(A)
+        # case A*B on rhs
         if (isinstance(arg2, torch.fx.Node)
-            and arg2.op == "call_function" and arg2.target in (torch.mul, operator.mul)
+                and arg2.op == "call_function"
+                and arg2.target in (torch.mul, operator.mul)
                 and arg1 in arg2.args):
-            a_node = arg1
-            mul_node = arg2
-            b_node = arg2.args[1] if arg2.args[0] is a_node else arg2.args[0]
             recip_a_node = lhs
-            match_found = True
-        # Symmetric: lhs = Recip(A*B) and rhs = Recip(A)
+            mul_node = arg2
+            a_node = arg1
+            b_node = arg2.args[1] if arg2.args[0] is arg1 else arg2.args[0]
+
+        # case A*B on lhs
         elif (isinstance(arg1, torch.fx.Node)
-              and arg1.op == "call_function" and arg1.target in (torch.mul, operator.mul)
+              and arg1.op == "call_function"
+              and arg1.target in (torch.mul, operator.mul)
               and arg2 in arg1.args):
-            a_node = arg2
-            mul_node = arg1
-            b_node = arg1.args[1] if arg1.args[0] is a_node else arg1.args[0]
             recip_a_node = rhs
-            match_found = True
+            mul_node = arg1
+            a_node = arg2
+            b_node = arg1.args[1] if arg1.args[0] is arg2 else arg1.args[0]
+        else:
+            continue  # no match
 
-        if not match_found:
-            continue
-
+        # 3) insert the new ops before the old `node`
         with gm.graph.inserting_before(node):
             square_recip = gm.graph.call_function(
                 torch.square, args=(recip_a_node,))
-            recip_b = gm.graph.call_function(torch.reciprocal, args=(b_node,))
+            recip_b = gm.graph.call_function(
+                torch.reciprocal, args=(b_node,))
             new_mul = gm.graph.call_function(
                 torch.mul, args=(square_recip, recip_b))
 
+        # 4) redirect uses, mark old nodes for deletion
         node.replace_all_uses_with(new_mul)
-
-        # Clean up dead nodes if no other users
-        for dead in (node, mul_node, rhs if recip_a_node is lhs else lhs):
-            if len(dead.users) == 0:
-                gm.graph.erase_node(dead)
-
-        # Cleanup orphaned torch.tensor(1) nodes
-        for n in list(gm.graph.nodes):
-            if (
-                n.op == "call_function"
-                and n.target == torch.tensor
-                and not n.users
-            ):
-                gm.graph.erase_node(n)
-
+        nodes_to_delete.update({node, mul_node, lhs, rhs})
         modified = True
 
+    # 5) bulk‑erase dead nodes in reverse order
     if modified:
+        for n in reversed(list(gm.graph.nodes)):
+            if n in nodes_to_delete and not n.users:
+                gm.graph.erase_node(n)
         gm.graph.lint()
-        new_gm = torch.fx.GraphModule(gm, gm.graph)
-        new_gm.recompile()
-        return new_gm
+        new_module = GraphModule(gm, gm.graph)
+        new_module.recompile()
+        return new_module
+
     return gm
 
 
 def is_reciprocal(node):
-    """Check if a node represents a reciprocal operation."""
     if node.op != "call_function":
         return False
     if node.target == torch.reciprocal:
@@ -86,17 +77,11 @@ def is_reciprocal(node):
     if node.target == operator.truediv:
         return is_constant_one(node.args[0])
     if node.target in (torch.pow, operator.pow):
-        return (
-            len(node.args) >= 2 and
-            isinstance(node.args[1], (int, float)) and
-            float(node.args[1]) == -1.0
-        )
-
+        return len(node.args) >= 2 and float(node.args[1]) == -1.0
     return False
 
 
 def get_recip_arg(node):
-    """Get the argument to a reciprocal operation."""
     if node.target == torch.reciprocal:
         return node.args[0]
     if node.target == operator.truediv:
@@ -107,13 +92,10 @@ def get_recip_arg(node):
 
 
 def is_constant_one(node):
-    """Check if node represents the constant 1.0."""
-    return (
-        node.op == "call_function"
-        and node.target == torch.tensor
-        and isinstance(node.args[0], (int, float))
-        and float(node.args[0]) == 1.0
-    )
+    return (node.op == "call_function"
+            and node.target == torch.tensor
+            and isinstance(node.args[0], (int, float))
+            and float(node.args[0]) == 1.0)
 
 
 def run_associative_swap():

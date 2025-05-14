@@ -25,7 +25,9 @@ def find_elementwise_chains(graph):
     visited = set()
 
     for node in graph.nodes:
-        if node in visited or not is_elementwise(node):
+        if node in visited:
+            continue
+        if not is_elementwise(node):
             continue
 
         chain = [node]
@@ -98,6 +100,7 @@ def generate_fused_fn(chain, gm):
         return result
 
     fused_function.__name__ = "fused_function"
+    fused_function.flops_per_element = len(chain)
     fused_function.is_fused_function = True
     return fused_function
 
